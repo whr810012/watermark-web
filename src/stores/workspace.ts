@@ -1,7 +1,8 @@
 import JSZip from 'jszip'
 import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
-import { detectMediaKind, validateMediaFile } from '../core/media'
+import { detectionsToCsv, detectionsToJson, downloadTextFile } from '../core/export-detections'
+import { batchLimitFor, detectMediaKind, validateMediaFile } from '../core/media'
 import {
   defaultWatermarkOptions,
   type DetectionResult,
@@ -25,14 +26,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const cancelled = ref(false)
 
   const mediaKind = computed(() => (files.value[0] ? detectMediaKind(files.value[0]) : null))
-  const canProcess = computed(
-    () =>
-      files.value.length > 0 &&
-      status.value !== 'processing' &&
-      (mode.value === 'detect' ||
-        options.mode === 'text' ||
-        (options.mode === 'logo' && Boolean(options.logoFile))),
-  )
+  const canProcess = computed(() => {
+    if (files.value.length === 0 || status.value === 'processing') return false
+    if (mode.value === 'detect') return true
+    if (options.embedStyle === 'hidden') return Boolean(options.hiddenPayload.trim())
+    const hasVisible =
+      options.mode === 'text' || (options.mode === 'logo' && Boolean(options.logoFile))
+    return hasVisible
+  })
 
   function clearResultUrls() {
     for (const result of results.value) {
@@ -64,13 +65,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       status.value = 'error'
       return
     }
-    const kind = detectMediaKind(incoming[0])
-    if (kind !== 'image' && incoming.length > 1) {
-      error.value = 'PDF 和视频首版每次仅处理一个文件'
+    const kind = detectMediaKind(incoming[0])!
+    const limit = batchLimitFor(kind)
+    if (incoming.length > limit) {
+      error.value =
+        kind === 'image'
+          ? `图片每次最多处理 ${limit} 个`
+          : kind === 'pdf'
+            ? `PDF 每次最多处理 ${limit} 个`
+            : `视频每次最多处理 ${limit} 个（串行，较慢）`
       status.value = 'error'
       return
     }
-    files.value = kind === 'image' ? incoming.slice(0, 20) : incoming.slice(0, 1)
+    files.value = incoming.slice(0, limit)
   }
 
   function removeFile(index: number) {
@@ -86,6 +93,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function setMode(nextMode: WorkflowMode) {
     if (mode.value === nextMode) return
     mode.value = nextMode
+    files.value = []
     resetResults()
   }
 
@@ -108,7 +116,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         const baseProgress = index / files.value.length
         const span = 1 / files.value.length
         updateProgress({
-          phase: `处理 ${file.name}`,
+          phase: `处理 ${index + 1}/${files.value.length} · ${file.name}`,
           progress: baseProgress,
         })
 
@@ -123,7 +131,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
             const { processVideo } = await import('../engines/video')
             result = await processVideo(file, options, (videoProgress) =>
               updateProgress({
-                phase: videoProgress.phase,
+                phase: `${index + 1}/${files.value.length} · ${videoProgress.phase}`,
                 progress: baseProgress + videoProgress.progress * span,
               }),
             )
@@ -138,7 +146,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
             detection = await detectPdf(file)
           } else {
             const { detectVideo } = await import('../engines/video')
-            detection = await detectVideo(file, updateProgress)
+            detection = await detectVideo(file, (videoProgress) =>
+              updateProgress({
+                phase: `${index + 1}/${files.value.length} · ${videoProgress.phase}`,
+                progress: baseProgress + videoProgress.progress * span,
+              }),
+            )
           }
           detections.value.push({ ...detection, fileName: file.name })
         }
@@ -184,6 +197,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  function exportDetections(format: 'json' | 'csv') {
+    if (!detections.value.length) return
+    if (format === 'json') {
+      downloadTextFile(detectionsToJson(detections.value), 'dandan-detections.json', 'application/json')
+      return
+    }
+    downloadTextFile(detectionsToCsv(detections.value), 'dandan-detections.csv', 'text/csv;charset=utf-8')
+  }
+
   return {
     mode,
     files,
@@ -203,5 +225,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     cancel,
     downloadResult,
     downloadAll,
+    exportDetections,
   }
 })

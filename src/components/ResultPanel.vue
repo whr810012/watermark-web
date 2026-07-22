@@ -5,6 +5,8 @@ import {
   CircleX,
   Download,
   FileArchive,
+  FileJson,
+  FileSpreadsheet,
   LoaderCircle,
   RotateCcw,
   ScanLine,
@@ -27,10 +29,25 @@ const emit = defineEmits<{
   retry: []
   download: [result: ProcessingResult]
   downloadAll: []
+  exportJson: []
+  exportCsv: []
 }>()
 
 function confidence(value: number) {
   return `${Math.round(value * 100)}%`
+}
+
+function integrityLabel(value: DetectionResult['integrity']) {
+  if (value === 'valid') return '校验通过'
+  if (value === 'damaged') return '可能受损'
+  return '未知'
+}
+
+function formatEmbeddedAt(value: Date | string | null) {
+  if (!value) return '—'
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString()
 }
 </script>
 
@@ -92,12 +109,22 @@ function confidence(value: number) {
             <dl v-if="item.found">
               <div><dt>隐藏标识</dt><dd>{{ item.payload || '空标识' }}</dd></div>
               <div><dt>置信度</dt><dd>{{ confidence(item.confidence) }}</dd></div>
-              <div><dt>完整性</dt><dd>{{ item.integrity === 'valid' ? '校验通过' : '可能受损' }}</dd></div>
+              <div><dt>完整性</dt><dd>{{ integrityLabel(item.integrity) }}</dd></div>
+              <div><dt>写入时间</dt><dd>{{ formatEmbeddedAt(item.embeddedAt) }}</dd></div>
+              <div><dt>样本数</dt><dd>{{ item.samples }}</dd></div>
             </dl>
           </div>
         </article>
+        <div v-if="detections.length" class="export-actions">
+          <button class="secondary-button" type="button" @click="emit('exportJson')">
+            <FileJson :size="15" /> 导出 JSON
+          </button>
+          <button class="secondary-button" type="button" @click="emit('exportCsv')">
+            <FileSpreadsheet :size="15" /> 导出 CSV
+          </button>
+        </div>
         <p class="detection-disclaimer">
-          “未检出”只表示没有识别到本工具的有效 DDWM 信号，不代表文件确定没有其他水印。
+          “未检出”只表示没有识别到本工具的有效 DDWM 信号，不代表文件确定没有其他水印。检测会尝试镜像翻转组合以提高命中率。
         </p>
       </div>
     </template>

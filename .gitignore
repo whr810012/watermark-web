@@ -12,7 +12,10 @@ dist
 dist-ssr
 test-results
 playwright-report
-*.local
+public/ffmpeg/
+public/fonts/*.otf
+public/fonts/*.ttf
+dev-dist/
 
 # Editor directories and files
 .vscode/*

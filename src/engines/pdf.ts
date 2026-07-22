@@ -1,12 +1,21 @@
-import { PDFDocument, StandardFonts, degrees, rgb, type PDFImage } from 'pdf-lib'
+import fontkit from '@pdf-lib/fontkit'
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont, type PDFImage } from 'pdf-lib'
 import * as pdfjs from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { createHiddenPattern, detectHiddenWatermark } from '../core/hidden-watermark/image'
 import { packHiddenPayload, unpackHiddenPayload } from '../core/hidden-watermark/payload'
 import { outputName } from '../core/media'
-import type { DetectionResult, ProcessingResult, WatermarkOptions } from '../core/types'
+import {
+  wantsHiddenWatermark,
+  wantsVisibleWatermark,
+  type DetectionResult,
+  type ProcessingResult,
+  type WatermarkOptions,
+} from '../core/types'
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+let cachedDefaultFont: ArrayBuffer | null = null
 
 function bytesToBase64(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes))
@@ -25,6 +34,10 @@ function hexToRgb(hex: string) {
   )
 }
 
+function needsCjk(text: string) {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
 function canvasToPng(canvas: HTMLCanvasElement) {
   return new Promise<ArrayBuffer>((resolve, reject) => {
     canvas.toBlob(async (blob) => {
@@ -37,6 +50,31 @@ function canvasToPng(canvas: HTMLCanvasElement) {
   })
 }
 
+async function loadDefaultFontBytes() {
+  if (cachedDefaultFont) return cachedDefaultFont.slice(0)
+  const url = `${import.meta.env.BASE_URL}fonts/NotoSansSC-Regular.otf`
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('缺少中文字体文件，请先运行 npm run fetch-fonts')
+  cachedDefaultFont = await response.arrayBuffer()
+  return cachedDefaultFont.slice(0)
+}
+
+async function resolveFont(document: PDFDocument, options: WatermarkOptions, text: string) {
+  document.registerFontkit(fontkit)
+  if (options.mode === 'logo') {
+    return document.embedFont(StandardFonts.HelveticaBold)
+  }
+  if (options.customFontFile) {
+    const bytes = await options.customFontFile.arrayBuffer()
+    return document.embedFont(bytes, { subset: true })
+  }
+  if (needsCjk(text)) {
+    const bytes = await loadDefaultFontBytes()
+    return document.embedFont(bytes, { subset: true })
+  }
+  return document.embedFont(StandardFonts.HelveticaBold)
+}
+
 async function hiddenOverlay(payload: string, strength: number) {
   const width = 680
   const height = 960
@@ -46,7 +84,7 @@ async function hiddenOverlay(payload: string, strength: number) {
   canvas.height = height
   const context = canvas.getContext('2d')
   if (!context) throw new Error('无法创建 PDF 隐藏水印图层')
-  context.putImageData(new ImageData(pattern.data, width, height), 0, 0)
+  context.putImageData(new ImageData(new Uint8ClampedArray(pattern.data), width, height), 0, 0)
   return canvasToPng(canvas)
 }
 
@@ -86,51 +124,60 @@ function logoPositions(width: number, height: number, markWidth: number, markHei
 
 export async function processPdf(file: File, options: WatermarkOptions): Promise<ProcessingResult> {
   const document = await PDFDocument.load(await file.arrayBuffer())
-  const font = await document.embedFont(StandardFonts.HelveticaBold)
+  const text = options.text.trim() || 'DANDAN HUB'
+  let font: PDFFont | null = null
   let logo: PDFImage | null = null
-  if (options.mode === 'logo' && options.logoFile) {
-    const logoBytes = await normalizeLogo(options.logoFile)
-    logo =
-      options.logoFile.type === 'image/jpeg'
-        ? await document.embedJpg(logoBytes)
-        : await document.embedPng(logoBytes)
+
+  if (wantsVisibleWatermark(options)) {
+    if (options.mode === 'logo' && options.logoFile) {
+      const logoBytes = await normalizeLogo(options.logoFile)
+      logo =
+        options.logoFile.type === 'image/jpeg'
+          ? await document.embedJpg(logoBytes)
+          : await document.embedPng(logoBytes)
+      font = await document.embedFont(StandardFonts.HelveticaBold)
+    } else {
+      font = await resolveFont(document, options, text)
+    }
   }
-  const hiddenImage = options.hiddenEnabled
+
+  const hiddenImage = wantsHiddenWatermark(options)
     ? await document.embedPng(await hiddenOverlay(options.hiddenPayload, options.hiddenStrength))
     : null
-  if (options.hiddenEnabled) {
+  if (wantsHiddenWatermark(options)) {
     document.setSubject(`DDWM:${bytesToBase64(packHiddenPayload(options.hiddenPayload))}`)
   }
 
   for (const page of document.getPages()) {
     const { width, height } = page.getSize()
-    const fontSize = Math.max(14, Math.min(width, height) * options.scale)
-    const text = options.text.trim() || 'DANDAN HUB'
-    const markHeight = fontSize * 1.25
-    const markWidth = logo
-      ? markHeight * (logo.width / Math.max(1, logo.height))
-      : font.widthOfTextAtSize(text, fontSize)
+    if (wantsVisibleWatermark(options) && (logo || font)) {
+      const fontSize = Math.max(14, Math.min(width, height) * options.scale)
+      const markHeight = fontSize * 1.25
+      const markWidth = logo
+        ? markHeight * (logo.width / Math.max(1, logo.height))
+        : font!.widthOfTextAtSize(text, fontSize)
 
-    for (const position of logoPositions(width, height, markWidth, markHeight, options)) {
-      if (logo) {
-        page.drawImage(logo, {
-          x: position.x,
-          y: position.y,
-          width: markWidth,
-          height: markHeight,
-          opacity: options.opacity,
-          rotate: degrees(options.rotation),
-        })
-      } else {
-        page.drawText(text, {
-          x: position.x,
-          y: position.y,
-          size: fontSize,
-          font,
-          color: hexToRgb(options.color),
-          opacity: options.opacity,
-          rotate: degrees(options.rotation),
-        })
+      for (const position of logoPositions(width, height, markWidth, markHeight, options)) {
+        if (logo) {
+          page.drawImage(logo, {
+            x: position.x,
+            y: position.y,
+            width: markWidth,
+            height: markHeight,
+            opacity: options.opacity,
+            rotate: degrees(options.rotation),
+          })
+        } else if (font) {
+          page.drawText(text, {
+            x: position.x,
+            y: position.y,
+            size: fontSize,
+            font,
+            color: hexToRgb(options.color),
+            opacity: options.opacity,
+            rotate: degrees(options.rotation),
+          })
+        }
       }
     }
 

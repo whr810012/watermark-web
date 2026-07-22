@@ -5,10 +5,25 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'workspace',
-      component: () => import('../pages/WorkspacePage.vue'),
+      name: 'landing',
+      component: () => import('../pages/LandingPage.vue'),
+    },
+    {
+      path: '/embed',
+      name: 'embed',
+      component: () => import('../pages/EmbedPage.vue'),
+    },
+    {
+      path: '/detect',
+      name: 'detect',
+      component: () => import('../pages/DetectPage.vue'),
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
     },
   ],
+  scrollBehavior: () => ({ top: 0 }),
 })
 
 export default router

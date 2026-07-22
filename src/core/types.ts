@@ -2,6 +2,8 @@ export type MediaKind = 'image' | 'pdf' | 'video'
 export type WorkflowMode = 'embed' | 'detect'
 export type WatermarkMode = 'text' | 'logo'
 export type PlacementMode = 'single' | 'tile'
+export type EmbedStyle = 'visible' | 'hidden' | 'both'
+export type VideoEncodePreset = 'fast' | 'balanced' | 'quality'
 export type WatermarkPosition =
   | 'top-left'
   | 'top-right'
@@ -20,9 +22,12 @@ export type WatermarkOptions = {
   gap: number
   position: WatermarkPosition
   color: string
-  hiddenEnabled: boolean
+  embedStyle: EmbedStyle
   hiddenPayload: string
   hiddenStrength: number
+  imageQuality: number
+  videoEncode: VideoEncodePreset
+  customFontFile: File | null
 }
 
 export type DetectionResult = {
@@ -57,7 +62,24 @@ export const defaultWatermarkOptions: WatermarkOptions = {
   gap: 96,
   position: 'bottom-right',
   color: '#ffffff',
-  hiddenEnabled: false,
+  embedStyle: 'both',
   hiddenPayload: '',
-  hiddenStrength: 6,
+  hiddenStrength: 7,
+  imageQuality: 0.92,
+  videoEncode: 'balanced',
+  customFontFile: null,
+}
+
+export function wantsVisibleWatermark(options: Pick<WatermarkOptions, 'embedStyle'>) {
+  return options.embedStyle !== 'hidden'
+}
+
+export function wantsHiddenWatermark(options: Pick<WatermarkOptions, 'embedStyle'>) {
+  return options.embedStyle !== 'visible'
+}
+
+export const VIDEO_ENCODE_MAP: Record<VideoEncodePreset, { preset: string; crf: string }> = {
+  fast: { preset: 'veryfast', crf: '23' },
+  balanced: { preset: 'fast', crf: '20' },
+  quality: { preset: 'medium', crf: '18' },
 }

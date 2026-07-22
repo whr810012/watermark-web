@@ -2,16 +2,29 @@ import type { FFmpeg as FFmpegType } from '@ffmpeg/ffmpeg'
 import { createHiddenPattern } from '../core/hidden-watermark/image'
 import { outputName } from '../core/media'
 import { drawVisibleWatermark, loadBitmap } from '../core/render'
-import type {
-  DetectionResult,
-  JobProgress,
-  ProcessingResult,
-  WatermarkOptions,
+import {
+  VIDEO_ENCODE_MAP,
+  wantsHiddenWatermark,
+  wantsVisibleWatermark,
+  type DetectionResult,
+  type JobProgress,
+  type ProcessingResult,
+  type WatermarkOptions,
 } from '../core/types'
 import { detectImage } from './image'
 
 let ffmpeg: FFmpegType | null = null
 let loadedVariant: 'single' | 'multi' | null = null
+
+function ffmpegBaseUrl(canUseThreads: boolean) {
+  const cdn = import.meta.env.VITE_FFMPEG_CDN as string | undefined
+  if (cdn) {
+    const packageName = canUseThreads ? '@ffmpeg/core-mt' : '@ffmpeg/core'
+    return `${cdn.replace(/\/$/, '')}/${packageName}@0.12.10/dist/esm`
+  }
+  const folder = canUseThreads ? 'core-mt' : 'core'
+  return `${import.meta.env.BASE_URL}ffmpeg/${folder}`
+}
 
 async function getFfmpeg(
   onProgress?: (progress: JobProgress) => void,
@@ -32,8 +45,7 @@ async function getFfmpeg(
   ffmpeg = new FFmpeg()
   onProgress?.({ phase: canUseThreads ? '加载多线程视频引擎' : '加载兼容视频引擎', progress: 0.04 })
 
-  const packageName = canUseThreads ? '@ffmpeg/core-mt' : '@ffmpeg/core'
-  const baseUrl = `https://cdn.jsdelivr.net/npm/${packageName}@0.12.10/dist/esm`
+  const baseUrl = ffmpegBaseUrl(canUseThreads)
   const loadOptions: Parameters<FFmpegType['load']>[0] = {
     coreURL: await toBlobURL(`${baseUrl}/ffmpeg-core.js`, 'text/javascript'),
     wasmURL: await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, 'application/wasm'),
@@ -95,15 +107,17 @@ async function buildOverlay(
   if (!context) throw new Error('无法创建视频水印画布')
 
   const logo = options.mode === 'logo' && options.logoFile ? await loadBitmap(options.logoFile) : null
-  drawVisibleWatermark(context, width, height, options, logo)
+  if (wantsVisibleWatermark(options)) {
+    drawVisibleWatermark(context, width, height, options, logo)
+  }
   logo?.close()
 
-  if (options.hiddenEnabled) {
+  if (wantsHiddenWatermark(options)) {
     const pattern = createHiddenPattern(width, height, options.hiddenPayload, options.hiddenStrength)
     const layer = document.createElement('canvas')
     layer.width = width
     layer.height = height
-    layer.getContext('2d')?.putImageData(new ImageData(pattern.data, width, height), 0, 0)
+    layer.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(pattern.data), width, height), 0, 0)
     context.drawImage(layer, 0, 0)
   }
   return canvasToBlob(canvas)
@@ -127,6 +141,7 @@ export async function processVideo(
   const inputName = `input.${file.name.split('.').pop() || 'mp4'}`
   const overlayName = 'watermark-overlay.png'
   const outputFile = 'watermarked.mp4'
+  const encode = VIDEO_ENCODE_MAP[options.videoEncode]
   const progressHandler = ({ progress }: { progress: number }) =>
     onProgress?.({ phase: '正在逐帧合成水印', progress: 0.12 + Math.max(0, progress) * 0.84 })
   engine.on('progress', progressHandler)
@@ -157,9 +172,9 @@ export async function processVideo(
       '-c:v',
       'libx264',
       '-preset',
-      'ultrafast',
+      encode.preset,
       '-crf',
-      '20',
+      encode.crf,
       '-pix_fmt',
       'yuv420p',
       '-c:a',

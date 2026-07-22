@@ -1,7 +1,13 @@
 import { detectHiddenWatermark, embedHiddenWatermark } from '../core/hidden-watermark/image'
 import { outputName } from '../core/media'
 import { drawVisibleWatermark, loadBitmap } from '../core/render'
-import type { DetectionResult, ProcessingResult, WatermarkOptions } from '../core/types'
+import {
+  wantsHiddenWatermark,
+  wantsVisibleWatermark,
+  type DetectionResult,
+  type ProcessingResult,
+  type WatermarkOptions,
+} from '../core/types'
 
 function canUseImageWorker() {
   return typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined'
@@ -35,7 +41,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality = 0.92) {
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error('浏览器无法导出处理后的图片'))),
       type,
-      quality,
+      type === 'image/png' ? undefined : quality,
     )
   })
 }
@@ -58,7 +64,7 @@ export async function processImage(
 ): Promise<ProcessingResult> {
   if (canUseImageWorker()) {
     const fileBuffer = await file.arrayBuffer()
-    const { logoFile, ...serializableOptions } = options
+    const { logoFile, customFontFile: _customFontFile, ...serializableOptions } = options
     const logoBuffer = logoFile ? await logoFile.arrayBuffer() : null
     const transfer: Transferable[] = [fileBuffer]
     if (logoBuffer) transfer.push(logoBuffer)
@@ -81,10 +87,12 @@ export async function processImage(
   const { canvas, context } = await fileToCanvas(file)
   const logo = options.mode === 'logo' && options.logoFile ? await loadBitmap(options.logoFile) : null
 
-  drawVisibleWatermark(context, canvas.width, canvas.height, options, logo)
+  if (wantsVisibleWatermark(options)) {
+    drawVisibleWatermark(context, canvas.width, canvas.height, options, logo)
+  }
   logo?.close()
 
-  if (options.hiddenEnabled) {
+  if (wantsHiddenWatermark(options)) {
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
     embedHiddenWatermark(imageData, options.hiddenPayload, options.hiddenStrength)
     context.putImageData(imageData, 0, 0)
@@ -92,7 +100,7 @@ export async function processImage(
 
   const type = ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) ? file.type : 'image/png'
   const extension = type === 'image/jpeg' ? 'jpg' : type.split('/')[1]
-  const blob = await canvasToBlob(canvas, type)
+  const blob = await canvasToBlob(canvas, type, options.imageQuality)
   return {
     blob,
     fileName: outputName(file, 'watermarked', extension),

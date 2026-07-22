@@ -2,7 +2,7 @@
 
 import { detectHiddenWatermark, embedHiddenWatermark } from '../core/hidden-watermark/image'
 import { drawVisibleWatermark } from '../core/render'
-import type { WatermarkOptions } from '../core/types'
+import { wantsHiddenWatermark, wantsVisibleWatermark, type WatermarkOptions } from '../core/types'
 
 type WorkerRequest = {
   id: string
@@ -31,19 +31,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     }
 
     if (!options) throw new Error('缺少水印参数')
+    const fullOptions = { ...options, logoFile: null }
     const logoBitmap = logo
       ? await createImageBitmap(new Blob([logo.buffer], { type: logo.type }))
       : null
-    drawVisibleWatermark(
-      context,
-      canvas.width,
-      canvas.height,
-      { ...options, logoFile: null },
-      logoBitmap,
-    )
+    if (wantsVisibleWatermark(fullOptions)) {
+      drawVisibleWatermark(context, canvas.width, canvas.height, fullOptions, logoBitmap)
+    }
     logoBitmap?.close()
 
-    if (options.hiddenEnabled) {
+    if (wantsHiddenWatermark(fullOptions)) {
       const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
       embedHiddenWatermark(imageData, options.hiddenPayload, options.hiddenStrength)
       context.putImageData(imageData, 0, 0)
@@ -52,7 +49,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     const outputType = ['image/png', 'image/jpeg', 'image/webp'].includes(file.type)
       ? file.type
       : 'image/png'
-    const blob = await canvas.convertToBlob({ type: outputType, quality: 0.92 })
+    const quality = outputType === 'image/png' ? undefined : options.imageQuality
+    const blob = await canvas.convertToBlob({ type: outputType, quality })
     const buffer = await blob.arrayBuffer()
     self.postMessage({ id, result: { buffer, type: outputType } }, { transfer: [buffer] })
   } catch (cause) {

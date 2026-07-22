@@ -5,6 +5,9 @@ const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime']
 const MAX_IMAGE_BYTES = 40 * 1024 * 1024
 const MAX_PDF_BYTES = 120 * 1024 * 1024
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024
+export const MAX_IMAGE_BATCH = 20
+export const MAX_PDF_BATCH = 3
+export const MAX_VIDEO_BATCH = 2
 
 export function detectMediaKind(file: Pick<File, 'type' | 'name'>): MediaKind | null {
   const extension = file.name.toLowerCase().split('.').pop()
@@ -28,6 +31,12 @@ export function validateMediaFile(file: File) {
     return `${kind === 'image' ? '图片' : kind === 'pdf' ? 'PDF' : '视频'}不能超过 ${size} MB`
   }
   return null
+}
+
+export function batchLimitFor(kind: MediaKind) {
+  if (kind === 'image') return MAX_IMAGE_BATCH
+  if (kind === 'pdf') return MAX_PDF_BATCH
+  return MAX_VIDEO_BATCH
 }
 
 export function formatFileSize(bytes: number) {
