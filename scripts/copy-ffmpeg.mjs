@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
+/** Cloudflare Pages 单文件 ≤25MiB，core-mt wasm ~31MiB；CF 构建跳过打包，运行时从 CDN 加载 */
+if (process.env.SKIP_FFMPEG_BUNDLE === '1' || process.env.CF_PAGES === '1') {
+  console.log('[copy-ffmpeg] skip local bundle（CF Pages / CDN）')
+  process.exit(0)
+}
+
 function copyDir(from, to) {
   mkdirSync(to, { recursive: true })
   for (const entry of readdirSync(from, { withFileTypes: true })) {

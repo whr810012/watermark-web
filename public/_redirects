@@ -1,0 +1,6 @@
+# Vite base=/watermark/
+/watermark /index.html 200
+/watermark/ /index.html 200
+/watermark/* /:splat 200
+
+/* /index.html 200
