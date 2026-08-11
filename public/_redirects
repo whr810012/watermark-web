@@ -1,6 +1,18 @@
-# Vite base=/watermark/
-/watermark /index.html 200
-/watermark/ /index.html 200
-/watermark/* /:splat 200
+# Vite base=/watermark/：产物在 dist 根目录
+# 静态资源：去掉 /watermark 前缀；SPA 路由回落 index.html（勿用 /watermark/* → /:splat，深链会 404）
 
-/* /index.html 200
+/watermark/assets/*  /assets/:splat  200
+/watermark/fonts/*   /fonts/:splat   200
+/watermark/ffmpeg/*  /ffmpeg/:splat  200
+/watermark/favicon.svg  /favicon.svg  200
+/watermark/icons.svg    /icons.svg    200
+/watermark/manifest.webmanifest  /manifest.webmanifest  200
+/watermark/sw.js         /sw.js  200
+/watermark/workbox-*     /workbox-:splat  200
+/watermark/registerSW.js /registerSW.js  200
+
+/watermark   /index.html  200
+/watermark/  /index.html  200
+/watermark/* /index.html  200
+
+/*  /index.html  200

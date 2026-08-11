@@ -16,14 +16,22 @@
   --shadow-sm: 0 1px 3px rgba(31, 28, 26, 0.08);
   --radius: 22px;
   --radius-sm: 14px;
-  --font-display: 'Outfit', 'Noto Sans SC', sans-serif;
-  --font-body: 'Noto Sans SC', 'Outfit', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-display: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-body: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   font-family: var(--font-body);
   color: var(--ink);
   background: var(--paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/watermark/fonts/NotoSansSC-Regular.otf') format('opentype');
 }
 
 * {

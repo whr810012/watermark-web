@@ -9,7 +9,7 @@
   for = "/*"
   [headers.values]
     Cross-Origin-Opener-Policy = "same-origin"
-    Cross-Origin-Embedder-Policy = "require-corp"
+    Cross-Origin-Embedder-Policy = "credentialless"
     Cross-Origin-Resource-Policy = "same-origin"
     X-Content-Type-Options = "nosniff"
 
@@ -17,11 +17,26 @@
   for = "/*.wasm"
   [headers.values]
     Content-Type = "application/wasm"
-    Cross-Origin-Resource-Policy = "same-origin"
+    Cross-Origin-Resource-Policy = "cross-origin"
+
+[[redirects]]
+  from = "/watermark/assets/*"
+  to = "/assets/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/watermark/fonts/*"
+  to = "/fonts/:splat"
+  status = 200
 
 [[redirects]]
   from = "/watermark/*"
-  to = "/:splat"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/watermark"
+  to = "/index.html"
   status = 200
 
 [[redirects]]

@@ -46,14 +46,31 @@ async function getFfmpeg(
   onProgress?.({ phase: canUseThreads ? '加载多线程视频引擎' : '加载兼容视频引擎', progress: 0.04 })
 
   const baseUrl = ffmpegBaseUrl(canUseThreads)
-  const loadOptions: Parameters<FFmpegType['load']>[0] = {
-    coreURL: await toBlobURL(`${baseUrl}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, 'application/wasm'),
+  try {
+    const loadOptions: Parameters<FFmpegType['load']>[0] = {
+      coreURL: await toBlobURL(`${baseUrl}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, 'application/wasm'),
+    }
+    if (canUseThreads) {
+      loadOptions.workerURL = await toBlobURL(
+        `${baseUrl}/ffmpeg-core.worker.js`,
+        'text/javascript',
+      )
+    }
+    await ffmpeg.load(loadOptions)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    // 多线程 CDN 失败时回退单线程（生产默认 unpkg）
+    if (!forceSingle && canUseThreads) {
+      onProgress?.({ phase: '多线程引擎加载失败，改用兼容引擎', progress: 0.04 })
+      ffmpeg = null
+      loadedVariant = null
+      return getFfmpeg(onProgress, true)
+    }
+    throw new Error(
+      `视频引擎加载失败（无法获取 FFmpeg）。请检查网络是否可访问视频引擎 CDN，或稍后重试。详情：${detail}`,
+    )
   }
-  if (canUseThreads) {
-    loadOptions.workerURL = await toBlobURL(`${baseUrl}/ffmpeg-core.worker.js`, 'text/javascript')
-  }
-  await ffmpeg.load(loadOptions)
   loadedVariant = variant
   return ffmpeg
 }
@@ -151,7 +168,9 @@ export async function processVideo(
     await withTimeout(
       engine.writeFile(inputName, new Uint8Array(await file.arrayBuffer())),
       15_000,
-      '多线程视频引擎没有响应',
+      forceSingle || loadedVariant === 'single'
+        ? '兼容视频引擎没有响应'
+        : '多线程视频引擎没有响应',
     )
     const overlay = await buildOverlay(metadata.width, metadata.height, options)
     await withTimeout(
@@ -160,7 +179,9 @@ export async function processVideo(
         new Uint8Array(await overlay.arrayBuffer()),
       ),
       15_000,
-      '多线程视频引擎没有响应',
+      forceSingle || loadedVariant === 'single'
+        ? '兼容视频引擎没有响应'
+        : '多线程视频引擎没有响应',
     )
     await engine.exec([
       '-i',
@@ -212,15 +233,22 @@ export async function processVideo(
 export async function detectVideo(
   file: File,
   onProgress?: (progress: JobProgress) => void,
+  forceSingle = false,
 ): Promise<DetectionResult> {
   const metadata = await videoMetadata(file)
-  const engine = await getFfmpeg(onProgress)
+  const engine = await getFfmpeg(onProgress, forceSingle)
   const inputName = `detect.${file.name.split('.').pop() || 'mp4'}`
-  await engine.writeFile(inputName, new Uint8Array(await file.arrayBuffer()))
   const sampleTimes = [0, metadata.duration * 0.5, Math.max(0, metadata.duration - 0.25)]
   const results: DetectionResult[] = []
 
   try {
+    await withTimeout(
+      engine.writeFile(inputName, new Uint8Array(await file.arrayBuffer())),
+      15_000,
+      forceSingle || loadedVariant === 'single'
+        ? '兼容视频引擎没有响应'
+        : '多线程视频引擎没有响应',
+    )
     for (let index = 0; index < sampleTimes.length; index += 1) {
       const frameName = `sample-${index}.png`
       onProgress?.({ phase: `抽取视频样本 ${index + 1}/3`, progress: 0.12 + index * 0.25 })
@@ -238,6 +266,13 @@ export async function detectVideo(
       results.push(await detectImage(new Blob([bytes as BlobPart], { type: 'image/png' })))
       await engine.deleteFile(frameName)
     }
+  } catch (cause) {
+    if (!forceSingle && loadedVariant === 'multi') {
+      cancelVideoProcessing()
+      onProgress?.({ phase: '多线程不可用，切换兼容引擎', progress: 0.05 })
+      return detectVideo(file, onProgress, true)
+    }
+    throw cause
   } finally {
     await engine.deleteFile(inputName).catch(() => undefined)
   }

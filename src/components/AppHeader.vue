@@ -72,7 +72,7 @@ onUnmounted(() => {
           识别水印
         </router-link>
       </div>
-      <a class="hub-link" href="/">蛋蛋中心</a>
+      <a class="hub-link" href="https://dandanhub.vip/">蛋蛋中心</a>
       <button v-if="canInstall" class="hub-link" type="button" @click="installApp">
         <Download :size="14" /> 安装应用
       </button>
