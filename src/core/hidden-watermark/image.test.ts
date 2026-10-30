@@ -64,6 +64,35 @@ describe('hidden watermark robustness', () => {
     expect(result.integrity).toBe('valid')
   })
 
+  it('keeps solid-color embeds invisible on R/G (blue-only sparse LSB)', () => {
+    const value = 33
+    const buffer = solidBuffer(680, 360, value)
+    embedHiddenWatermark(buffer, 'ORDER-01', 5)
+    let maxRedGreen = 0
+    let maxBlue = 0
+    for (let index = 0; index < buffer.data.length; index += 4) {
+      maxRedGreen = Math.max(
+        maxRedGreen,
+        Math.abs(buffer.data[index] - value),
+        Math.abs(buffer.data[index + 1] - value),
+      )
+      maxBlue = Math.max(maxBlue, Math.abs(buffer.data[index + 2] - value))
+    }
+    expect(maxRedGreen).toBe(0)
+    expect(maxBlue).toBeLessThanOrEqual(2)
+    const result = detectHiddenWatermark(buffer)
+    expect(result.found).toBe(true)
+    expect(result.payload).toBe('ORDER-01')
+  })
+
+  it('detects a short chinese payload within byte budget', () => {
+    const buffer = solidBuffer(340, 340)
+    embedHiddenWatermark(buffer, '订单A1', 7)
+    const result = detectHiddenWatermark(buffer)
+    expect(result.found).toBe(true)
+    expect(result.payload).toBe('订单A1')
+  })
+
   it('still detects legacy v1 embeds', () => {
     const buffer = solidBuffer(340, 340)
     embedHiddenWatermark(buffer, 'owner-v1', 6, LEGACY_PROTOCOL_VERSION)

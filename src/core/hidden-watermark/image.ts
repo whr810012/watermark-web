@@ -3,14 +3,19 @@ import {
   PROTOCOL_VERSION,
   bitRepeatCount,
   bytesToRepeatedBits,
+  embeddablePayloadBytes,
   packHiddenPayload,
   repeatedSignalsToBytes,
   unpackHiddenPayload,
+  utf8ByteLength,
 } from './payload'
 
 export const HIDDEN_GRID_SIZE = 34
+export const HIDDEN_GRID_CELLS = HIDDEN_GRID_SIZE * HIDDEN_GRID_SIZE
 const V2_EMBED_MARGIN = 0.1
 const V2_DETECT_MARGINS = [0.1, 0.05, 0, 0.15, 0.08]
+/** v2 含 10% 边距时，可用区至少 102px → 整图至少约 128px */
+export const MIN_HIDDEN_SIDE = Math.ceil((HIDDEN_GRID_SIZE * 3) / (1 - 2 * V2_EMBED_MARGIN))
 
 export type PixelBuffer = {
   width: number
@@ -18,8 +23,26 @@ export type PixelBuffer = {
   data: Uint8ClampedArray
 }
 
+export function hiddenPayloadLimit(version = PROTOCOL_VERSION) {
+  return embeddablePayloadBytes(HIDDEN_GRID_CELLS, version)
+}
+
 function luminance(data: Uint8ClampedArray, offset: number) {
   return data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114
+}
+
+/** 只用蓝通道承载信号：人眼对蓝最不敏感，纯色底上几乎看不出网纹/竖纹 */
+function blueChannel(data: Uint8ClampedArray, offset: number) {
+  return data[offset + 2]
+}
+
+function addBlueDelta(data: Uint8ClampedArray, offset: number, delta: number) {
+  data[offset + 2] = Math.max(0, Math.min(255, data[offset + 2] + delta))
+}
+
+/** 稀疏取样，避免左右半格实心涂色形成可见竖条 */
+function shouldTouchPixel(x: number, y: number) {
+  return (Math.imul(x + 3, 374761) ^ Math.imul(y + 5, 668265)) % 3 === 0
 }
 
 function cellBounds(index: number, width: number, height: number, margin: number) {
@@ -35,13 +58,54 @@ function cellBounds(index: number, width: number, height: number, margin: number
   }
   const marginX = Math.floor(width * margin)
   const marginY = Math.floor(height * margin)
-  const usableW = Math.max(HIDDEN_GRID_SIZE * 3, width - marginX * 2)
-  const usableH = Math.max(HIDDEN_GRID_SIZE * 3, height - marginY * 2)
+  // 可用区不得超过画布，避免写出边界污染相邻行
+  const usableW = Math.max(HIDDEN_GRID_SIZE, width - marginX * 2)
+  const usableH = Math.max(HIDDEN_GRID_SIZE, height - marginY * 2)
+  const left = marginX + Math.floor((column * usableW) / HIDDEN_GRID_SIZE)
+  const right = marginX + Math.floor(((column + 1) * usableW) / HIDDEN_GRID_SIZE)
+  const top = marginY + Math.floor((row * usableH) / HIDDEN_GRID_SIZE)
+  const bottom = marginY + Math.floor(((row + 1) * usableH) / HIDDEN_GRID_SIZE)
   return {
-    left: marginX + Math.floor((column * usableW) / HIDDEN_GRID_SIZE),
-    right: marginX + Math.floor(((column + 1) * usableW) / HIDDEN_GRID_SIZE),
-    top: marginY + Math.floor((row * usableH) / HIDDEN_GRID_SIZE),
-    bottom: marginY + Math.floor(((row + 1) * usableH) / HIDDEN_GRID_SIZE),
+    left: Math.max(0, Math.min(width, left)),
+    right: Math.max(0, Math.min(width, right)),
+    top: Math.max(0, Math.min(height, top)),
+    bottom: Math.max(0, Math.min(height, bottom)),
+  }
+}
+
+/** 强度只影响是否用 2 档 LSB；默认 ±1，肉眼在 8bit 图上几乎不可见 */
+function embedAmount(strength: number) {
+  return strength >= 9 ? 2 : 1
+}
+
+/** 载荷比特往往填不满 34×34：用确定性填充铺满网格，避免只在上半区留下一团纹理 */
+function padBitsToGrid(bits: number[]) {
+  if (bits.length >= HIDDEN_GRID_CELLS) return bits.slice(0, HIDDEN_GRID_CELLS)
+  const padded = bits.slice()
+  let state = (bits.length + 1) * 2654435761
+  while (padded.length < HIDDEN_GRID_CELLS) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+    padded.push(state & 1)
+  }
+  return padded
+}
+
+/**
+ * 边距区写入同等幅度、无左右结构的蓝色底噪，避免「中间有块、四周干净」。
+ */
+function applyMarginGrain(buffer: PixelBuffer, margin: number, amount: number) {
+  if (margin <= 0 || amount <= 0) return
+  const marginX = Math.floor(buffer.width * margin)
+  const marginY = Math.floor(buffer.height * margin)
+  const right = buffer.width - marginX
+  const bottom = buffer.height - marginY
+  for (let y = 0; y < buffer.height; y += 1) {
+    for (let x = 0; x < buffer.width; x += 1) {
+      if (x >= marginX && x < right && y >= marginY && y < bottom) continue
+      if (!shouldTouchPixel(x, y)) continue
+      const sign = ((Math.imul(x + 1, 374761) ^ Math.imul(y + 1, 668265)) & 1) === 0 ? 1 : -1
+      addBlueDelta(buffer.data, (y * buffer.width + x) * 4, sign * amount)
+    }
   }
 }
 
@@ -52,34 +116,69 @@ function applyBitPattern(
   margin: number,
   mode: 'embed' | 'pattern',
 ) {
-  const amount = Math.max(2, Math.min(12, strength))
-  const alpha = Math.round(Math.max(10, Math.min(28, strength * 3)))
+  const amount = embedAmount(strength)
+  // PDF/视频：极低透明蓝色点，避免灰白棋盘马赛克
+  const alpha = Math.round(Math.max(2, Math.min(5, 1 + strength * 0.35)))
   const target = mode === 'pattern' ? new Uint8ClampedArray(buffer.width * buffer.height * 4) : buffer.data
+  const gridBits = padBitsToGrid(bits)
 
-  for (let index = 0; index < bits.length; index += 1) {
+  for (let index = 0; index < gridBits.length; index += 1) {
     const bounds = cellBounds(index, buffer.width, buffer.height, margin)
+    if (bounds.right - bounds.left < 2 || bounds.bottom - bounds.top < 1) continue
     const midpoint = Math.floor((bounds.left + bounds.right) / 2)
-    const direction = bits[index] ? 1 : -1
+    const direction = gridBits[index] ? 1 : -1
     for (let y = bounds.top; y < bounds.bottom; y += 1) {
       for (let x = bounds.left; x < bounds.right; x += 1) {
+        if (!shouldTouchPixel(x, y)) continue
         const side = x < midpoint ? 1 : -1
         const offset = (y * buffer.width + x) * 4
         if (mode === 'pattern') {
           const light = direction * side > 0
-          target[offset] = light ? 255 : 0
-          target[offset + 1] = light ? 255 : 0
+          target[offset] = 0
+          target[offset + 1] = 0
           target[offset + 2] = light ? 255 : 0
           target[offset + 3] = alpha
         } else {
-          const delta = direction * side * amount
-          target[offset] = Math.max(0, Math.min(255, target[offset] + delta))
-          target[offset + 1] = Math.max(0, Math.min(255, target[offset + 1] + delta))
-          target[offset + 2] = Math.max(0, Math.min(255, target[offset + 2] + delta))
+          addBlueDelta(target, offset, direction * side * amount)
         }
       }
     }
   }
+
+  if (mode === 'embed') {
+    applyMarginGrain(buffer, margin, amount)
+  } else {
+    const marginX = Math.floor(buffer.width * margin)
+    const marginY = Math.floor(buffer.height * margin)
+    const right = buffer.width - marginX
+    const bottom = buffer.height - marginY
+    for (let y = 0; y < buffer.height; y += 1) {
+      for (let x = 0; x < buffer.width; x += 1) {
+        if (x >= marginX && x < right && y >= marginY && y < bottom) continue
+        if (!shouldTouchPixel(x, y)) continue
+        const offset = (y * buffer.width + x) * 4
+        const light = ((Math.imul(x + 1, 374761) ^ Math.imul(y + 1, 668265)) & 1) === 0
+        target[offset] = 0
+        target[offset + 1] = 0
+        target[offset + 2] = light ? 255 : 0
+        target[offset + 3] = alpha
+      }
+    }
+  }
   return target
+}
+
+function assertEmbeddable(payload: string, width: number, height: number, version: number) {
+  if (width < MIN_HIDDEN_SIDE || height < MIN_HIDDEN_SIDE) {
+    throw new Error(`隐藏水印要求画面宽高至少为 ${MIN_HIDDEN_SIDE} 像素`)
+  }
+  const limit = hiddenPayloadLimit(version)
+  const bytes = utf8ByteLength(payload)
+  if (bytes > limit) {
+    throw new Error(
+      `隐藏标识过长（UTF-8 ${bytes} 字节），当前协议最多 ${limit} 字节（约 ${Math.floor(limit / 3)} 个汉字或 ${limit} 个英文）`,
+    )
+  }
 }
 
 export function embedHiddenWatermark(
@@ -88,11 +187,12 @@ export function embedHiddenWatermark(
   strength = 7,
   version = PROTOCOL_VERSION,
 ) {
-  const bits = bytesToRepeatedBits(packHiddenPayload(payload, Date.now(), version), version)
-  if (buffer.width < HIDDEN_GRID_SIZE * 3 || buffer.height < HIDDEN_GRID_SIZE * 3) {
-    throw new Error('隐藏水印要求画面宽高至少为 102 像素')
-  }
-  if (bits.length > HIDDEN_GRID_SIZE * HIDDEN_GRID_SIZE) {
+  assertEmbeddable(payload, buffer.width, buffer.height, version)
+  const bits = bytesToRepeatedBits(
+    packHiddenPayload(payload, Date.now(), version, hiddenPayloadLimit(version)),
+    version,
+  )
+  if (bits.length > HIDDEN_GRID_CELLS) {
     throw new Error('隐藏水印载荷过长')
   }
   const margin = version >= 2 ? V2_EMBED_MARGIN : 0
@@ -102,7 +202,11 @@ export function embedHiddenWatermark(
 
 export function createHiddenPattern(width: number, height: number, payload: string, strength = 7) {
   const version = PROTOCOL_VERSION
-  const bits = bytesToRepeatedBits(packHiddenPayload(payload, Date.now(), version), version)
+  assertEmbeddable(payload, width, height, version)
+  const bits = bytesToRepeatedBits(
+    packHiddenPayload(payload, Date.now(), version, hiddenPayloadLimit(version)),
+    version,
+  )
   const data = applyBitPattern(
     { width, height, data: new Uint8ClampedArray(width * height * 4) },
     bits,
@@ -119,10 +223,11 @@ function decodeOrientation(
   margin: number,
   flipX: boolean,
   flipY: boolean,
+  sample: (data: Uint8ClampedArray, offset: number) => number,
 ) {
   const repeats = bitRepeatCount(version)
   const signals: number[] = []
-  for (let index = 0; index < HIDDEN_GRID_SIZE * HIDDEN_GRID_SIZE; index += 1) {
+  for (let index = 0; index < HIDDEN_GRID_CELLS; index += 1) {
     const logicalColumn = index % HIDDEN_GRID_SIZE
     const logicalRow = Math.floor(index / HIDDEN_GRID_SIZE)
     const physicalColumn = flipX ? HIDDEN_GRID_SIZE - logicalColumn - 1 : logicalColumn
@@ -137,11 +242,12 @@ function decodeOrientation(
     for (let y = bounds.top; y < bounds.bottom; y += 1) {
       for (let x = bounds.left; x < bounds.right; x += 1) {
         const offset = (y * buffer.width + x) * 4
+        const value = sample(buffer.data, offset)
         if (x < midpoint) {
-          left += luminance(buffer.data, offset)
+          left += value
           leftCount += 1
         } else {
-          right += luminance(buffer.data, offset)
+          right += value
           rightCount += 1
         }
       }
@@ -176,10 +282,19 @@ export function detectHiddenWatermark(buffer: PixelBuffer): DetectionResult {
     ...V2_DETECT_MARGINS.map((margin) => ({ version: 2, margin })),
     { version: 1, margin: 0 },
   ]
-  const candidates = layouts.flatMap(({ version, margin }) =>
-    orientations.map(({ flipX, flipY }) => decodeOrientation(buffer, version, margin, flipX, flipY)),
+  // 先蓝通道（新嵌入），再亮度（兼容旧版 RGB 同改）
+  const sampleFns = [blueChannel, luminance]
+  const candidates = sampleFns.flatMap((sample) =>
+    layouts.flatMap(({ version, margin }) =>
+      orientations.map(({ flipX, flipY }) =>
+        decodeOrientation(buffer, version, margin, flipX, flipY, sample),
+      ),
+    ),
   )
-  const match = candidates.find((candidate) => candidate.unpacked)
+  // 优先完整性通过的候选，避免噪声方向抢先匹配到 damaged
+  const match =
+    candidates.find((candidate) => candidate.unpacked?.integrity) ??
+    candidates.find((candidate) => candidate.unpacked)
   const bestConfidence = Math.max(...candidates.map((candidate) => candidate.decoded.confidence))
   if (!match?.unpacked) {
     return {

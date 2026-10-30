@@ -23,11 +23,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   add: [files: File[]]
+  replace: [files: File[]]
   remove: [index: number]
   clear: []
 }>()
 
 const input = ref<HTMLInputElement | null>(null)
+const pickerMode = ref<'replace' | 'append'>('replace')
 const dragging = ref(false)
 const objectUrl = ref('')
 const logoUrl = ref('')
@@ -68,14 +70,25 @@ const previewStyle = computed(() => ({
 
 function pickFiles(event: Event) {
   const target = event.target as HTMLInputElement
-  emit('add', Array.from(target.files ?? []))
+  const next = Array.from(target.files ?? [])
+  if (pickerMode.value === 'append') emit('add', next)
+  else emit('replace', next)
   target.value = ''
+  pickerMode.value = 'replace'
 }
 
 function drop(event: DragEvent) {
   dragging.value = false
   if (props.disabled) return
-  emit('add', Array.from(event.dataTransfer?.files ?? []))
+  const next = Array.from(event.dataTransfer?.files ?? [])
+  // 已有图片队列时拖入视为追加，与「添加更多图片」一致；其它情况替换
+  const canAppend =
+    props.files.length > 0 &&
+    detectMediaKind(props.files[0]) === 'image' &&
+    next.length > 0 &&
+    next.every((item) => detectMediaKind(item) === 'image')
+  if (canAppend) emit('add', next)
+  else emit('replace', next)
 }
 
 function iconFor(item: File) {
@@ -83,8 +96,10 @@ function iconFor(item: File) {
   return media === 'video' ? Film : media === 'pdf' ? FileText : Image
 }
 
-function openPicker() {
-  if (!props.disabled) input.value?.click()
+function openPicker(mode: 'replace' | 'append' = 'replace') {
+  if (props.disabled) return
+  pickerMode.value = mode
+  input.value?.click()
 }
 </script>
 
@@ -113,9 +128,9 @@ function openPicker() {
       tabindex="0"
       :aria-disabled="disabled"
       :aria-label="file ? '更换文件或预览当前作品' : '拖拽或点击选择本地文件'"
-      @click="openPicker"
-      @keydown.enter.prevent="openPicker"
-      @keydown.space.prevent="openPicker"
+      @click="openPicker('replace')"
+      @keydown.enter.prevent="openPicker('replace')"
+      @keydown.space.prevent="openPicker('replace')"
       @dragenter.prevent="dragging = true"
       @dragover.prevent
       @dragleave.prevent="dragging = false"
@@ -165,9 +180,20 @@ function openPicker() {
           class="tile-preview"
           :style="{ opacity: options.opacity }"
         >
-          <span v-for="index in 12" :key="index" :style="previewStyle">{{
-            options.text || 'DANDAN HUB'
-          }}</span>
+          <template v-if="options.mode === 'logo' && options.logoFile">
+            <img
+              v-for="index in 12"
+              :key="`logo-${index}`"
+              :src="logoUrl"
+              alt=""
+              :style="previewStyle"
+            />
+          </template>
+          <template v-else>
+            <span v-for="index in 12" :key="`text-${index}`" :style="previewStyle">{{
+              options.text || 'DANDAN HUB'
+            }}</span>
+          </template>
         </div>
         <div
           v-else-if="mode === 'embed' && options.embedStyle === 'hidden'"
@@ -176,7 +202,11 @@ function openPicker() {
           仅写入隐藏标记 · 画面上不会出现可见水印
         </div>
         <span class="file-ribbon">{{ kind?.toUpperCase() }}</span>
-        <span class="media-stage__replace">点击或拖入可替换文件</span>
+        <span class="media-stage__replace">{{
+          files.length && detectMediaKind(files[0]) === 'image'
+            ? '点击可替换 · 拖入图片将追加到列表'
+            : '点击或拖入可替换文件'
+        }}</span>
       </template>
 
       <div v-else class="preview-empty media-stage__empty">
@@ -216,7 +246,7 @@ function openPicker() {
         class="add-more"
         type="button"
         :disabled="disabled"
-        @click="openPicker"
+        @click="openPicker('append')"
       >
         <FilePlus2 :size="16" /> 添加更多图片
       </button>

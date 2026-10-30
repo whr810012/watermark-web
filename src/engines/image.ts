@@ -10,6 +10,8 @@ import {
 } from '../core/types'
 
 function canUseImageWorker() {
+  // 开发态强制主线程，避免 HMR/浏览器缓存继续跑旧版 image.worker
+  if (import.meta.env.DEV) return false
   return typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined'
 }
 

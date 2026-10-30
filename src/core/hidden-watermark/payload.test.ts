@@ -23,6 +23,13 @@ describe('DDWM payload', () => {
     expect(decoded?.integrity).toBe(true)
   })
 
+  it('truncates utf-8 on character boundaries', () => {
+    const packed = packHiddenPayload('你好世界测试', Date.now(), PROTOCOL_VERSION, 7)
+    const decoded = unpackHiddenPayload(packed)
+    // 7 bytes fits two CJK chars (6) plus at most one more ASCII; third CJK would need 9
+    expect(decoded?.payload).toBe('你好')
+  })
+
   it('still unpacks legacy v1 payloads', () => {
     const packed = packHiddenPayload('legacy-owner', Date.UTC(2026, 0, 1), LEGACY_PROTOCOL_VERSION)
     const decoded = unpackHiddenPayload(packed)

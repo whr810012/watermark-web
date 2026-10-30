@@ -76,8 +76,8 @@ onUnmounted(() => {
       <button v-if="canInstall" class="hub-link" type="button" @click="installApp">
         <Download :size="14" /> 安装应用
       </button>
-      <span v-if="engineCached" class="offline-chip">引擎已缓存</span>
-      <span class="offline-chip"><WifiOff :size="14" /> 文件全程离线</span>
+      <span v-if="engineCached" class="offline-chip offline-chip--optional">引擎已缓存</span>
+      <span class="offline-chip offline-chip--core"><WifiOff :size="14" /> 文件全程离线</span>
     </nav>
   </header>
 </template>

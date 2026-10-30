@@ -64,7 +64,7 @@ export const defaultWatermarkOptions: WatermarkOptions = {
   color: '#ffffff',
   embedStyle: 'both',
   hiddenPayload: '',
-  hiddenStrength: 7,
+  hiddenStrength: 5,
   imageQuality: 0.92,
   videoEncode: 'balanced',
   customFontFile: null,

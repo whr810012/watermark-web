@@ -104,10 +104,14 @@ async function normalizeLogo(file: File) {
 function logoPositions(width: number, height: number, markWidth: number, markHeight: number, options: WatermarkOptions) {
   if (options.placement === 'tile') {
     const positions: Array<{ x: number; y: number }> = []
-    const gapX = markWidth + options.gap
-    const gapY = markHeight + options.gap
-    for (let y = -markHeight; y < height + markHeight; y += gapY) {
-      for (let x = -markWidth; x < width + markWidth; x += gapX) positions.push({ x, y })
+    const gapX = Math.max(markWidth + options.gap, 64)
+    const gapY = Math.max(markHeight + options.gap, 64)
+    let row = 0
+    for (let y = -markHeight; y < height + markHeight; y += gapY, row += 1) {
+      const offset = row % 2 === 0 ? 0 : gapX / 2
+      for (let x = -markWidth; x < width + markWidth; x += gapX) {
+        positions.push({ x: x + offset, y })
+      }
     }
     return positions
   }
@@ -226,7 +230,9 @@ export async function detectPdf(file: File): Promise<DetectionResult> {
         embeddedAt: metadataPayload.embeddedAt,
         integrity: metadataPayload.integrity ? 'valid' : 'damaged',
         samples: results.length,
-        message: `DDWM 完整性校验通过；已扫描 ${results.length} 个页面样本`,
+        message: metadataPayload.integrity
+          ? `DDWM 完整性校验通过；已扫描 ${results.length} 个页面样本`
+          : `DDWM 元数据已检出但完整性校验未通过；已扫描 ${results.length} 个页面样本`,
       }
     }
     return {

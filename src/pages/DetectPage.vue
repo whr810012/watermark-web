@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowRight, Fingerprint, ScanSearch, Shield, Sparkles } from 'lucide-vue-next'
 import { storeToRefs } from 'pinia'
-import { onMounted } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import MediaStage from '../components/MediaStage.vue'
 import ResultPanel from '../components/ResultPanel.vue'
@@ -17,13 +17,25 @@ const {
   results,
   detections,
   canProcess,
+  processBlockedReason,
   mediaKind,
 } = storeToRefs(store)
 const isCrossOriginIsolated = globalThis.crossOriginIsolated
 const previewOptions = defaultWatermarkOptions
+const resultAnchor = ref<HTMLElement | null>(null)
+
+const guideTitle = computed(() => (status.value === 'done' ? '检测参考' : '识别说明'))
+const showReadyHint = computed(() => status.value === 'idle' && files.value.length > 0)
 
 onMounted(() => {
   store.setMode('detect')
+})
+
+watch(status, async (next, prev) => {
+  if (prev !== 'processing') return
+  if (next !== 'done' && next !== 'error') return
+  await nextTick()
+  resultAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 })
 </script>
 
@@ -49,10 +61,14 @@ onMounted(() => {
               mode="detect"
               :options="previewOptions"
               :disabled="status === 'processing'"
-              @add="store.addFiles"
+              @add="(next) => store.addFiles(next, { append: true })"
+              @replace="(next) => store.addFiles(next)"
               @remove="store.removeFile"
               @clear="store.clearFiles"
             />
+            <p v-if="processBlockedReason && status !== 'processing'" class="process-hint">
+              {{ processBlockedReason }}
+            </p>
             <button
               class="process-button"
               type="button"
@@ -69,28 +85,42 @@ onMounted(() => {
           </div>
 
           <div class="workspace-column">
-            <ResultPanel
-              class="result-panel--inline"
-              mode="detect"
-              :status="status"
-              :progress="progress"
-              :error="error"
-              :results="results"
-              :detections="detections"
-              @cancel="store.cancel"
-              @retry="store.processFiles"
-              @download="store.downloadResult"
-              @download-all="store.downloadAll"
-              @export-json="store.exportDetections('json')"
-              @export-csv="store.exportDetections('csv')"
-            />
+            <div
+              v-if="showReadyHint"
+              class="result-panel result-panel--ready"
+              role="status"
+            >
+              <div class="result-icon result-icon--scan"><ScanSearch :size="24" /></div>
+              <div class="result-content">
+                <strong>已选 {{ files.length }} 个文件</strong>
+                <span>点击左侧「开始检测隐藏水印」，结果会显示在这里。</span>
+              </div>
+            </div>
+
+            <div ref="resultAnchor">
+              <ResultPanel
+                class="result-panel--inline"
+                mode="detect"
+                :status="status"
+                :progress="progress"
+                :error="error"
+                :results="results"
+                :detections="detections"
+                @cancel="store.cancel"
+                @retry="store.processFiles"
+                @download="store.downloadResult"
+                @download-all="store.downloadAll"
+                @export-json="store.exportDetections('json')"
+                @export-csv="store.exportDetections('csv')"
+              />
+            </div>
 
             <section class="detect-guide" aria-labelledby="detect-guide-heading">
               <div class="section-heading">
-                <span class="step-index">02</span>
+                <span class="step-index step-index--muted">?</span>
                 <div>
                   <p class="eyebrow">DDWM SCANNER</p>
-                  <h2 id="detect-guide-heading">识别说明</h2>
+                  <h2 id="detect-guide-heading">{{ guideTitle }}</h2>
                 </div>
               </div>
               <div class="scan-graphic">
